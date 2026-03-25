@@ -1,0 +1,121 @@
+# ========== Java ==========
+# 编译输出
+*.class
+*.jar
+*.war
+*.ear
+target/
+out/
+build/
+
+# Maven
+pom.xml.tag
+pom.xml.releaseBackup
+pom.xml.versionsBackup
+pom.xml.next
+release.properties
+dependency-reduced-pom.xml
+buildNumber.properties
+.mvn/timing.properties
+.mvn/wrapper/maven-wrapper.jar
+
+# Gradle
+.gradle/
+gradle-app.setting
+!gradle-wrapper.jar
+.gradletasknamecache
+
+# ========== Go ==========
+# 编译产物
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+
+# 二进制文件
+/bin/
+/pkg/
+/dist/
+/vendor/
+/vendor.bak/
+
+# Go 工作区
+go.work
+go.work.sum
+
+# Go 测试覆盖率
+*.coverprofile
+coverage.out
+coverage.html
+
+# ========== Docker ==========
+# Docker 相关（根据你的 docker 目录结构）
+docker/*.tar
+docker/*.gz
+*.pid
+docker-compose.override.yml
+.dockerignore
+
+# ========== IDE 和编辑器 ==========
+# IntelliJ IDEA
+.idea/
+*.iml
+*.iws
+*.ipr
+.classpath
+.project
+.settings/
+*.swp
+*.swo
+*~
+
+# VS Code
+.vscode/
+.history/
+*.code-workspace
+
+# Eclipse
+.metadata/
+bin/
+tmp/
+*.tmp
+*.bak
+*.log
+
+# ========== 操作系统 ==========
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+desktop.ini
+
+# ========== 日志和临时文件 ==========
+*.log
+logs/
+*.pid
+*.seed
+*.pid.lock
+*.tmp
+*.temp
+
+# ========== 环境配置 ==========
+.env
+.env.local
+.env.*.local
+.env.production
+.env.development
+
+# ========== 项目特定 ==========
+# 测试报告
+test-output/
+reports/
+*.html
+
+# 依赖缓存
+.cache/
