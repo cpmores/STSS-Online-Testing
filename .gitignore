@@ -25,6 +25,9 @@ gradle-app.setting
 !gradle-wrapper.jar
 .gradletasknamecache
 
+# MySQL数据库
+mysql-data/
+
 # ========== Go ==========
 # 编译产物
 *.exe

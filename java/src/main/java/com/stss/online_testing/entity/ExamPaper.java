@@ -1,0 +1,32 @@
+package com.stss.online_testing.entity;
+
+import com.baomidou.mybatisplus.annotation.*;
+import lombok.Data;
+import java.util.Date;
+
+@Data
+@TableName("exam_paper")
+public class ExamPaper {
+    @TableId(type = IdType.AUTO)
+    private Long id;
+    
+    private Long courseId;
+    private String title;
+    private Integer totalScore;
+    private Integer durationMins;
+    private Integer passScore;
+    
+    // 0-草稿, 1-已发布, 2-已撤回
+    private Integer status;
+    private Long creatorId;
+    
+    private Date validStartTime;
+    private Date validEndTime;
+    
+    @TableField(fill = FieldFill.INSERT)
+    private Date createTime;
+    @TableField(fill = FieldFill.INSERT_UPDATE)
+    private Date updateTime;
+    @TableLogic
+    private Integer isDeleted;
+}
