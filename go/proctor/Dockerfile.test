@@ -1,0 +1,20 @@
+# 从 go/ 目录构建: docker build -f proctor/Dockerfile.test --target proctor .
+FROM golang:1.26-alpine AS builder
+WORKDIR /app
+COPY logger/ logger/
+COPY proctor/ proctor/
+WORKDIR /app/proctor
+RUN go mod download
+RUN go build -o /app/bin/proctor ./cmd/proctor
+RUN go build -o /app/bin/testclient ./cmd/testclient
+
+FROM golang:1.26-alpine AS proctor
+WORKDIR /app
+COPY --from=builder /app/bin/proctor .
+EXPOSE 9090
+CMD ["/app/proctor"]
+
+FROM golang:1.26-alpine AS testclient
+WORKDIR /app
+COPY --from=builder /app/bin/testclient .
+CMD ["/app/testclient"]
