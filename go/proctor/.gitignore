@@ -4,9 +4,9 @@
 *.dll
 *.so
 *.dylib
-controller
-proctor
-testclient
+/controller
+/proctor
+/testclient
 
 # Test binary, built with `go test -c`
 *.test
