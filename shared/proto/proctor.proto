@@ -1,0 +1,103 @@
+// Proctor 模块 protobuf 定义
+// 用于 Go Proctor 和 Java API Server 之间的数据交换和 gRPC 通信
+syntax = "proto3";
+package proctor.v1;
+option go_package = "proctor/v1";
+option java_package = "com.stss.online_testing.proto.proctor.v1";
+option java_multiple_files = false;
+
+// ============================================================
+// 数据消息：Redis 存储 + gRPC 传输共用
+// ============================================================
+
+// QuestionItem 试卷中的一道题目（含答案和分值，仅内部使用）。
+message QuestionItem {
+    int64  question_id = 1;   // 题目 ID
+    int32  type        = 2;   // 题型: 1=单选, 2=是非
+    int32  score       = 3;   // 分值
+    string stem        = 4;   // 题干
+    repeated string options = 5; // 选项列表 (是非题可为空)
+    string answer      = 6;   // 标准答案 (不可返回给学生)
+    int32  sort_order  = 7;   // 排序
+}
+
+// ExamPaper 试卷快照，Java 写入 Redis exam:{examId}:paper。
+message ExamPaper {
+    int64  exam_id        = 1;
+    int64  course_id      = 2;
+    string title          = 3;
+    int32  total_score    = 4;
+    int32  duration_mins  = 5;
+    int32  pass_score     = 6;
+    int64  valid_start_time = 7;  // Unix timestamp (秒)
+    int64  valid_end_time   = 8;  // Unix timestamp (秒)
+    repeated QuestionItem questions = 9;
+}
+
+// ExamSession 考试会话，Go 写入 Redis exam:{examId}:session:{studentId}。
+// Redis 中按字段独立存取，此为整体序列化格式。
+message ExamSession {
+    int64 record_id   = 1;
+    int64 student_id  = 2;
+    int64 exam_id     = 3;
+    int64 start_time  = 4;  // Unix timestamp (秒)
+    int64 expire_time = 5;  // Unix timestamp (秒)
+    int32 status      = 6;  // 0=考试中, 1=已交卷, 2=超时强制交卷
+}
+
+// AnswerSheet 学生的全部答题记录。
+message AnswerSheet {
+    int64  exam_id    = 1;
+    int64  student_id = 2;
+    int64  record_id  = 3;
+    repeated AnswerEntry answers = 4;
+}
+
+// AnswerEntry 单题作答。
+message AnswerEntry {
+    int64  question_id    = 1;
+    string student_answer = 2; // 空字符串表示未作答
+}
+
+// ============================================================
+// gRPC 接口：交卷通知
+// ============================================================
+
+// CommitExamRequest Go 交卷时发送给 Java 的请求。
+// 包含评卷所需的全部信息：学生答案 + 试卷快照。
+message CommitExamRequest {
+    int64  exam_id    = 1;
+    int64  student_id = 2;
+    int64  record_id  = 3;
+    repeated AnswerEntry answers = 4;   // 学生本次所有答案
+    int32  submit_type = 5;             // 0=主动交卷, 1=超时强制交卷
+    int64  submit_time = 6;             // Unix timestamp (秒)
+}
+
+// CommitExamResponse Java 评分完成后返回的结果。
+message CommitExamResponse {
+    bool   success     = 1;
+    int32  total_score = 2;  // 总分
+    int32  error_code  = 3;
+    string error_msg   = 4;
+}
+
+// GradingTask Redis 评分队列中的任务 (grading:pending List)。
+// 当 gRPC 不可用时作为降级方案。
+message GradingTask {
+    int64 exam_id    = 1;
+    int64 student_id = 2;
+    int64 record_id  = 3;
+    int64 submit_time = 4;
+}
+
+// ============================================================
+// RPC 服务
+// ============================================================
+
+service ProctorService {
+    // CommitExam Go Proctor 通知 Java API Server 进行评分入库。
+    // Go 调用此 RPC 后，Java 从请求中获取答案直接评分，
+    // 无需额外从 Redis 读取。
+    rpc CommitExam(CommitExamRequest) returns (CommitExamResponse);
+}

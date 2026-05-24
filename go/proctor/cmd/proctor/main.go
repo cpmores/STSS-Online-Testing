@@ -29,6 +29,7 @@ func main() {
 	if redisAddr == "" {
 		redisAddr = "localhost:6379"
 	}
+	javaAddr := os.Getenv("JAVA_ADDR") // Java gRPC 地址，为空时仅用 Redis 队列
 
 	// ---- Logger ----
 	logClient, err := loggerclient.New(loggerAddr, "proctor-service")
@@ -46,7 +47,7 @@ func main() {
 	defer rdb.Close()
 
 	// ---- Session Manager ----
-	sm, err := NewSessionManager(rdb, examID)
+	sm, err := NewSessionManager(rdb, examID, javaAddr)
 	if err != nil {
 		log.Fatalf("failed to load exam paper: %v", err)
 	}
@@ -210,14 +211,13 @@ func sessionHandler(sm *SessionManager) gin.HandlerFunc {
 		}
 		answers, _ := sm.GetAnswers(c.Request.Context(), studentID)
 		remaining, _ := sm.RemainingSeconds(c.Request.Context(), studentID)
-		paper := sm.Paper()
-
+		paper := sm.PaperJSON()
 		c.JSON(http.StatusOK, gin.H{
-			"examId":           paper.ExamID,
-			"title":            paper.Title,
+			"examId":           paper["examId"],
+			"title":            paper["title"],
 			"remainingSeconds": remaining,
 			"answers":          answers,
-			"questions":        paper.Questions,
+			"questions":        paper["questions"],
 			"session":          session,
 		})
 	}
