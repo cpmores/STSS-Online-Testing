@@ -1,0 +1,55 @@
+syntax = "proto3";
+package loggerServer.v1;
+option go_package = "loggerServer/v1";
+import "google/protobuf/timestamp.proto";
+enum LogLevel {
+    LOG_LEVEL_UNSPECIFIED = 0;
+    LOG_LEVEL_DEBUG = 1;
+    LOG_LEVEL_INFO = 2;
+    LOG_LEVEL_WARN = 3;
+    LOG_LEVEL_ERROR = 4;
+}
+message LogRequest {
+    LogLevel level = 1;
+
+    google.protobuf.Timestamp timestamp = 2;
+
+    string service = 3;
+
+    int32 operationId = 4;
+    string traceId = 5;
+    string userId = 6;
+
+    string message = 7;
+
+    string method = 8;
+    string path = 9;
+    int32 statusCode = 10;
+    int64 durationMS = 11;
+
+    string entity_type  = 12;                 
+    string entity_id    = 13;
+    // service fields
+    map<string, string> stringFields = 20;
+    map<string, int64> intFields = 21;
+    // error
+    string errorMessage = 30;
+    string stackTrace = 31;
+}
+message LogResponse {
+    bool success = 1;
+    int32 errorCode = 2;
+    string errorMessage = 3;
+}
+message BatchLogResponse {
+    bool success = 1;
+    int32 errorCode = 2;
+    int64 errorPos = 3;
+    string errorMessage = 4;
+}
+service LoggerService {
+    // single log
+    rpc Log(LogRequest) returns (LogResponse);
+    // batch log
+    rpc BatchLog(stream LogRequest) returns (BatchLogResponse);
+}

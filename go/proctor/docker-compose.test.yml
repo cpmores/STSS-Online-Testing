@@ -1,0 +1,36 @@
+services:
+  redis:
+    image: redis:7-alpine
+    container_name: proctor-test-redis
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 1s
+      timeout: 3s
+      retries: 10
+
+  init-data:
+    image: redis:7-alpine
+    container_name: proctor-test-init
+    depends_on:
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./test/init-data.sh:/init-data.sh
+    entrypoint: ["sh", "/init-data.sh"]
+    environment:
+      - REDIS_HOST=redis
+
+  proctor:
+    image: ot-proctor:latest
+    container_name: proctor-test-exam
+    depends_on:
+      init-data:
+        condition: service_completed_successfully
+    ports:
+      - "9090:9090"
+    environment:
+      - EXAM_ID=1001
+      - REDIS_ADDR=redis:6379
+      - LOGGER_ADDR=

@@ -1,0 +1,26 @@
+# 构建阶段
+FROM golang:1.26-alpine AS builder
+
+WORKDIR /app
+COPY . .
+
+# 如果你的依赖还没下载，这一步会在 Docker 里下载
+RUN go mod tidy
+
+# 编译出两个可执行文件
+RUN go build -o /app/bin/controller ./cmd/controller
+RUN go build -o /app/bin/proctor ./cmd/proctor
+
+# Controller 运行镜像
+FROM alpine:latest AS controller
+WORKDIR /app
+COPY --from=builder /app/bin/controller /app/controller
+EXPOSE 8080
+CMD ["/app/controller"]
+
+# Proctor 运行镜像
+FROM alpine:latest AS proctor
+WORKDIR /app
+COPY --from=builder /app/bin/proctor /app/proctor
+EXPOSE 9090
+CMD ["/app/proctor"]
