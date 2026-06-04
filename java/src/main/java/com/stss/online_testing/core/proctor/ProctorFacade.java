@@ -19,6 +19,8 @@ import com.stss.online_testing.mapper.ExamRuntimeConfigMapper;
 import com.stss.online_testing.mapper.QuestionMapper;
 import com.stss.online_testing.mapper.StudentExamAnswerMapper;
 import com.stss.online_testing.mapper.StudentExamRecordMapper;
+import com.stss.online_testing.core.redis.ExamPaperRedisPublisher;
+import com.stss.online_testing.core.redis.ProctorControllerClient;
 import com.stss.online_testing.service.IExamPaperService;
 import java.util.ArrayList;
 import java.util.Date;
@@ -29,6 +31,8 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 import java.util.stream.Collectors;
+import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Component;
 
 @Component
@@ -42,6 +46,9 @@ public class ProctorFacade {
     private final StudentExamAnswerMapper studentExamAnswerMapper;
     private final ExamRuntimeConfigMapper examRuntimeConfigMapper;
     private final ObjectMapper objectMapper;
+    private final ExamPaperRedisPublisher examPaperRedisPublisher;
+    private final ProctorControllerClient proctorControllerClient;
+    private final StringRedisTemplate redisTemplate;
 
     public ProctorFacade(
             IExamPaperService examPaperService,
@@ -51,7 +58,10 @@ public class ProctorFacade {
             StudentExamRecordMapper studentExamRecordMapper,
             StudentExamAnswerMapper studentExamAnswerMapper,
             ExamRuntimeConfigMapper examRuntimeConfigMapper,
-            ObjectMapper objectMapper) {
+            ObjectMapper objectMapper,
+            ObjectProvider<ExamPaperRedisPublisher> examPaperRedisPublisherProvider,
+            ObjectProvider<ProctorControllerClient> proctorControllerClientProvider,
+            ObjectProvider<StringRedisTemplate> redisTemplateProvider) {
         this.examPaperService = examPaperService;
         this.examPaperMapper = examPaperMapper;
         this.examPaperQuestionMapper = examPaperQuestionMapper;
@@ -60,6 +70,9 @@ public class ProctorFacade {
         this.studentExamAnswerMapper = studentExamAnswerMapper;
         this.examRuntimeConfigMapper = examRuntimeConfigMapper;
         this.objectMapper = objectMapper;
+        this.examPaperRedisPublisher = examPaperRedisPublisherProvider.getIfAvailable();
+        this.proctorControllerClient = proctorControllerClientProvider.getIfAvailable();
+        this.redisTemplate = redisTemplateProvider.getIfAvailable();
     }
 
     public Object execute(StorageCommand command) {
@@ -97,12 +110,18 @@ public class ProctorFacade {
             studentExamRecordMapper.insert(draft);
         }
 
+        publishExamPaper(examId);
+        ProctorControllerClient.ProctorStartResult proctorStartResult = startProctorIfEnabled(examId);
+
         Map<String, Object> data = new LinkedHashMap<>();
         data.put("recordId", draft.getId());
         data.put("attemptsUsed", submittedCount);
         data.put("remainingAttempts", Math.max(config.getAllowedAttempts() - submittedCount, 0));
         data.put("paper", paper);
         data.put("savedAnswers", loadAnswerMap(draft.getId()));
+        if (proctorStartResult != null && proctorStartResult.wsEndpoint() != null) {
+            data.put("wsEndpoint", proctorStartResult.wsEndpoint());
+        }
         return data;
     }
 
@@ -183,6 +202,94 @@ public class ProctorFacade {
         data.put("totalScore", totalScore);
         data.put("scoreVisible", getRuntimeConfig(examId).getScoreVisible() == 1);
         data.put("answerVisible", getRuntimeConfig(examId).getAnswerVisible() == 1);
+        return data;
+    }
+
+    /**
+     * 由 Go Proctor gRPC 或 Redis 评分队列触发的评分入口。
+     * 接收原始答案列表，完成评分、答案入库和记录状态更新。
+     *
+     * @param examId     试卷 ID
+     * @param studentId  学生 ID
+     * @param recordId   考试记录 ID
+     * @param answers    学生作答列表（questionId -> studentAnswer）
+     * @param submitType 0=主动交卷, 1=超时强制交卷
+     * @return 包含 recordId 和 totalScore 的结果 Map
+     */
+    public Map<String, Object> gradeExamFromProctor(
+            Long examId,
+            Long studentId,
+            Long recordId,
+            List<AnswerPayload> answers) {
+        StudentExamRecord record = studentExamRecordMapper.selectById(recordId);
+        if (record == null) {
+            throw ApiBusinessException.notFound("考试记录不存在: recordId=" + recordId);
+        }
+        if (!Objects.equals(record.getStudentId(), studentId)) {
+            throw ApiBusinessException.forbidden("无权操作其他学生的考试记录");
+        }
+        if (!Objects.equals(record.getExamId(), examId)) {
+            throw ApiBusinessException.unprocessable("考试记录与试卷不匹配");
+        }
+        if (!Objects.equals(record.getStatus(), 0)) {
+            throw ApiBusinessException.conflict("该考试记录已提交，不能重复评分");
+        }
+
+        List<ExamPaperQuestion> relations = loadPaperRelationsOrThrow(examId);
+        Set<Long> allowedQuestionIds =
+                relations.stream().map(ExamPaperQuestion::getQuestionId).collect(Collectors.toSet());
+        validateAnswers(answers, allowedQuestionIds);
+        syncAnswers(recordId, answers);
+
+        Map<Long, StudentExamAnswer> answerMap = loadAnswerDetails(recordId);
+        List<Long> paperQuestionIds = relations.stream().map(ExamPaperQuestion::getQuestionId).toList();
+        Map<Long, Question> questionMap = questionMapper.selectBatchIds(paperQuestionIds)
+                .stream()
+                .collect(Collectors.toMap(Question::getId, question -> question));
+        if (questionMap.size() != paperQuestionIds.size()) {
+            List<Long> missingQuestionIds = new ArrayList<>();
+            for (Long questionId : paperQuestionIds) {
+                if (!questionMap.containsKey(questionId)) {
+                    missingQuestionIds.add(questionId);
+                }
+            }
+            throw ApiBusinessException.unprocessable(
+                    "试卷包含已删除或不存在的题目，无法交卷: " + missingQuestionIds);
+        }
+
+        int totalScore = 0;
+        for (ExamPaperQuestion relation : relations) {
+            StudentExamAnswer detail = answerMap.get(relation.getQuestionId());
+            if (detail == null) {
+                detail = new StudentExamAnswer();
+                detail.setRecordId(recordId);
+                detail.setQuestionId(relation.getQuestionId());
+                detail.setStudentAnswer(null);
+                studentExamAnswerMapper.insert(detail);
+            }
+
+            Question question = questionMap.get(relation.getQuestionId());
+            boolean correct =
+                    question != null
+                            && question.getAnswer() != null
+                            && detail.getStudentAnswer() != null
+                            && question.getAnswer().trim()
+                                    .equalsIgnoreCase(detail.getStudentAnswer().trim());
+            detail.setIsCorrect(correct ? 1 : 0);
+            detail.setScore(correct ? relation.getScore() : 0);
+            studentExamAnswerMapper.updateById(detail);
+            totalScore += detail.getScore() == null ? 0 : detail.getScore();
+        }
+
+        record.setStatus(1);
+        record.setSubmitTime(new Date());
+        record.setTotalScore(totalScore);
+        studentExamRecordMapper.updateById(record);
+        cleanupRedisSession(examId, studentId);
+
+        Map<String, Object> data = new LinkedHashMap<>();
+        data.put("recordId", recordId);
+        data.put("totalScore", totalScore);
         return data;
     }
 
@@ -440,6 +547,28 @@ public class ProctorFacade {
         return loadPaperRelationsOrThrow(examId).stream()
                 .map(ExamPaperQuestion::getQuestionId)
                 .collect(Collectors.toSet());
+    }
+
+    private void publishExamPaper(Long examId) {
+        if (examPaperRedisPublisher != null) {
+            examPaperRedisPublisher.publishExamPaper(examId);
+        }
+    }
+
+    private ProctorControllerClient.ProctorStartResult startProctorIfEnabled(Long examId) {
+        if (proctorControllerClient == null) {
+            return null;
+        }
+        return proctorControllerClient.startProctor(examId);
+    }
+
+    private void cleanupRedisSession(Long examId, Long studentId) {
+        if (redisTemplate == null) {
+            return;
+        }
+        redisTemplate.delete(List.of(
+                "exam:" + examId + ":answers:" + studentId,
+                "exam:" + examId + ":session:" + studentId));
     }
 
     private ExamRuntimeConfig getRuntimeConfig(Long examId) {

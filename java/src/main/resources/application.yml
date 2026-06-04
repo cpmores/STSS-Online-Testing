@@ -1,13 +1,17 @@
 server:
-  port: 8080 # 提供给前端和 Go 服务的调用端口
+  port: ${SERVER_PORT:8080}
 
 spring:
   datasource:
     driver-class-name: com.mysql.cj.jdbc.Driver
-    # 这里的 localhost 是因为你的 Java 代码目前运行在宿主机(WSL)，而暴露了 3306 端口
-    url: jdbc:mysql://localhost:3306/stss_testing?useUnicode=true&characterEncoding=utf-8&useSSL=false&serverTimezone=Asia/Singapore
-    username: root
-    password: root # 需与你在 docker-compose.yml 中设置的密码保持绝对一致
+    url: jdbc:mysql://${MYSQL_HOST:localhost}:${MYSQL_PORT:3306}/${MYSQL_DATABASE:stss_testing}?useUnicode=true&characterEncoding=utf-8&useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=${MYSQL_TIMEZONE:Asia/Shanghai}
+    username: ${MYSQL_USER:root}
+    password: ${MYSQL_PASSWORD:root}
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
+      timeout: 3000ms
 
 mybatis-plus:
   configuration:
@@ -21,9 +25,19 @@ mybatis-plus:
 
 logger:
   grpc:
-    host: localhost
-    port: 50061
-    plaintext: true
-    timeout-ms: 500
-    api-service-name: apiserver-service
-    proctor-service-name: proctor-controller-service
+    host: ${LOGGER_GRPC_HOST:localhost}
+    port: ${LOGGER_GRPC_PORT:50051}
+    plaintext: ${LOGGER_GRPC_PLAINTEXT:true}
+    timeout-ms: ${LOGGER_GRPC_TIMEOUT_MS:500}
+    api-service-name: ${LOGGER_API_SERVICE_NAME:apiserver-service}
+    proctor-service-name: ${LOGGER_PROCTOR_SERVICE_NAME:proctor-controller-service}
+
+proctor:
+  grpc:
+    port: ${PROCTOR_GRPC_PORT:50080}
+    enabled: ${PROCTOR_GRPC_ENABLED:true}
+  controller:
+    url: ${PROCTOR_CONTROLLER_URL:http://localhost:8081}
+    enabled: ${PROCTOR_CONTROLLER_ENABLED:false}
+  redis:
+    enabled: ${PROCTOR_REDIS_ENABLED:true}
