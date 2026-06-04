@@ -29,6 +29,20 @@ func main() {
 	if proctorImage == "" {
 		proctorImage = "ot-proctor:latest"
 	}
+	javaAddr := os.Getenv("JAVA_ADDR")
+	proctorNetwork := os.Getenv("PROCTOR_NETWORK")
+	publicHost := os.Getenv("PROCTOR_PUBLIC_HOST")
+	if publicHost == "" {
+		publicHost = "localhost"
+	}
+	wsScheme := os.Getenv("PROCTOR_WS_SCHEME")
+	if wsScheme == "" {
+		wsScheme = "ws"
+	}
+	controllerPort := os.Getenv("CONTROLLER_PORT")
+	if controllerPort == "" {
+		controllerPort = "8080"
+	}
 	cleanupTTL := 2 * time.Hour // 容器过期清理时间
 
 	// ---- Logger ----
@@ -48,7 +62,7 @@ func main() {
 	}
 
 	// ---- Docker 注册表 ----
-	registry, err := NewProctorRegistry(proctorImage, redisAddr, loggerAddr)
+	registry, err := NewProctorRegistry(proctorImage, redisAddr, loggerAddr, javaAddr, proctorNetwork)
 	if err != nil {
 		log.Fatalf("failed to init docker registry: %v", err)
 	}
@@ -71,15 +85,15 @@ func main() {
 	r := gin.Default()
 	r.Use(requestLogger(logClient))
 
-	r.POST("/api/proctor/v1/start", startHandler(registry, redisClient, logClient, cleanupTTL))
+	r.POST("/api/proctor/v1/start", startHandler(registry, redisClient, logClient, cleanupTTL, publicHost, wsScheme))
 	r.GET("/api/proctor/v1/status/:examId", statusHandler(registry, logClient))
 	r.DELETE("/api/proctor/v1/stop/:examId", stopHandler(registry, redisClient, logClient))
 
 	// 兼容旧接口
-	r.POST("/api/exam/v1/start-proctor", startHandler(registry, redisClient, logClient, cleanupTTL))
+	r.POST("/api/exam/v1/start-proctor", startHandler(registry, redisClient, logClient, cleanupTTL, publicHost, wsScheme))
 
 	// ---- 优雅退出 ----
-	srv := &http.Server{Addr: ":8080", Handler: r}
+	srv := &http.Server{Addr: ":" + controllerPort, Handler: r}
 	go func() {
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Fatalf("server error: %v", err)
@@ -98,7 +112,14 @@ func main() {
 
 // ---- 路由处理器 ----
 
-func startHandler(reg *ProctorRegistry, rdb *redis.Client, lc *loggerclient.Client, cleanupTTL time.Duration) gin.HandlerFunc {
+func startHandler(
+	reg *ProctorRegistry,
+	rdb *redis.Client,
+	lc *loggerclient.Client,
+	cleanupTTL time.Duration,
+	publicHost string,
+	wsScheme string,
+) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		examID := c.Query("examId")
 		if examID == "" {
@@ -116,10 +137,10 @@ func startHandler(reg *ProctorRegistry, rdb *redis.Client, lc *loggerclient.Clie
 
 		// 从试卷快照中获取过期时间
 		var paper struct {
-			ValidEndTime time.Time `json:"validEndTime"`
+			ValidEndTime int64 `json:"validEndTime"`
 		}
-		if err := json.Unmarshal([]byte(paperData), &paper); err == nil && !paper.ValidEndTime.IsZero() {
-			if time.Now().After(paper.ValidEndTime) {
+		if err := json.Unmarshal([]byte(paperData), &paper); err == nil && paper.ValidEndTime > 0 {
+			if time.Now().Unix() > paper.ValidEndTime {
 				c.JSON(http.StatusGone, gin.H{"error": "exam has expired"})
 				return
 			}
@@ -134,7 +155,7 @@ func startHandler(reg *ProctorRegistry, rdb *redis.Client, lc *loggerclient.Clie
 		}
 
 		// 写入 Redis 供前端发现
-		wsEndpoint := fmt.Sprintf("ws://localhost:%s/ws", inst.HostPort)
+		wsEndpoint := fmt.Sprintf("%s://%s:%s/ws", wsScheme, publicHost, inst.HostPort)
 		proctorInfo := map[string]string{
 			"examId":      examID,
 			"hostPort":    inst.HostPort,

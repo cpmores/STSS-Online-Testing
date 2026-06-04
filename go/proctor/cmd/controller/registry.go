@@ -27,10 +27,12 @@ type ProctorRegistry struct {
 	image      string
 	redisAddr  string
 	loggerAddr string
+	javaAddr   string
+	network    string
 }
 
 // NewProctorRegistry 创建注册表并校验 Docker 连接。
-func NewProctorRegistry(image, redisAddr, loggerAddr string) (*ProctorRegistry, error) {
+func NewProctorRegistry(image, redisAddr, loggerAddr, javaAddr, networkName string) (*ProctorRegistry, error) {
 	cli, err := client.NewClientWithOpts(client.FromEnv, client.WithAPIVersionNegotiation())
 	if err != nil {
 		return nil, fmt.Errorf("failed to create docker client: %w", err)
@@ -41,6 +43,8 @@ func NewProctorRegistry(image, redisAddr, loggerAddr string) (*ProctorRegistry, 
 		image:      image,
 		redisAddr:  redisAddr,
 		loggerAddr: loggerAddr,
+		javaAddr:   javaAddr,
+		network:    networkName,
 	}, nil
 }
 
@@ -117,21 +121,26 @@ func (r *ProctorRegistry) create(examID string) (*ProctorInstance, error) {
 	ctx := context.Background()
 	containerName := fmt.Sprintf("proctor-exam-%s", examID)
 	proctorPort := network.MustParsePort("9090/tcp")
+	hostConfig := &container.HostConfig{
+		PublishAllPorts: true,
+	}
+	if r.network != "" {
+		hostConfig.NetworkMode = container.NetworkMode(r.network)
+	}
 
 	resp, err := r.dockerCli.ContainerCreate(ctx, client.ContainerCreateOptions{
 		Config: &container.Config{
-			Image:        r.image,
+			Image: r.image,
 			Env: []string{
 				fmt.Sprintf("EXAM_ID=%s", examID),
 				fmt.Sprintf("REDIS_ADDR=%s", r.redisAddr),
 				fmt.Sprintf("LOGGER_ADDR=%s", r.loggerAddr),
+				fmt.Sprintf("JAVA_ADDR=%s", r.javaAddr),
 			},
 			ExposedPorts: network.PortSet{proctorPort: struct{}{}},
 		},
-		HostConfig: &container.HostConfig{
-			PublishAllPorts: true,
-		},
-		Name: containerName,
+		HostConfig: hostConfig,
+		Name:       containerName,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to create container: %w", err)

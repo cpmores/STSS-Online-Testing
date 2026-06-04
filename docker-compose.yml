@@ -1,17 +1,134 @@
-version: '3.8'
-
 services:
-  # 题库 : MySQL 数据库服务
   mysql:
-    image: mysql:8.0
-    container_name: stss-mysql
-    restart: always
-    ports:
-      - "3306:3306"
+    image: docker.m.daocloud.io/library/mysql:8.0
+    restart: unless-stopped
     environment:
       MYSQL_ROOT_PASSWORD: root
-      MYSQL_DATABASE: stss_testing       
-      TZ: Asia/Shanghai                 
-    volumes:
-      - ./mysql-data:/var/lib/mysql
+      MYSQL_DATABASE: stss_testing
+      TZ: Asia/Shanghai
+    ports:
+      - "3306:3306"
     command: --character-set-server=utf8mb4 --collation-server=utf8mb4_unicode_ci
+    volumes:
+      - mysql_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h localhost -uroot -proot"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    networks:
+      - backend
+
+  redis:
+    image: docker.m.daocloud.io/library/redis:7-alpine
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    networks:
+      - backend
+
+  logger-service:
+    image: stss-logger:latest
+    build:
+      context: ./go/logger
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    ports:
+      - "50051:50051"
+    volumes:
+      - logger_logs:/log/ot
+    networks:
+      - backend
+
+  java-api:
+    image: stss-java-api:latest
+    build:
+      context: .
+      dockerfile: java/Dockerfile
+    restart: unless-stopped
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      logger-service:
+        condition: service_started
+    environment:
+      SERVER_PORT: 8080
+      MYSQL_HOST: mysql
+      MYSQL_PORT: 3306
+      MYSQL_DATABASE: stss_testing
+      MYSQL_USER: root
+      MYSQL_PASSWORD: root
+      MYSQL_TIMEZONE: Asia/Shanghai
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      LOGGER_GRPC_HOST: logger-service
+      LOGGER_GRPC_PORT: 50051
+      PROCTOR_GRPC_PORT: 50080
+      PROCTOR_GRPC_ENABLED: "true"
+      PROCTOR_CONTROLLER_ENABLED: "true"
+      PROCTOR_CONTROLLER_URL: http://proctor-controller:8081
+      PROCTOR_REDIS_ENABLED: "true"
+    ports:
+      - "8080:8080"
+      - "50080:50080"
+    networks:
+      - backend
+
+  proctor-image-bootstrap:
+    image: stss-proctor:latest
+    build:
+      context: ./go
+      dockerfile: proctor/Dockerfile.multi
+      target: proctor
+    entrypoint: ["/bin/sh", "-c", "exit 0"]
+    restart: "no"
+    networks:
+      - backend
+
+  proctor-controller:
+    image: stss-proctor-controller:latest
+    build:
+      context: ./go
+      dockerfile: proctor/Dockerfile.multi
+      target: controller
+    restart: unless-stopped
+    depends_on:
+      redis:
+        condition: service_healthy
+      java-api:
+        condition: service_started
+      logger-service:
+        condition: service_started
+      proctor-image-bootstrap:
+        condition: service_completed_successfully
+    environment:
+      REDIS_ADDR: redis:6379
+      JAVA_ADDR: java-api:50080
+      LOGGER_ADDR: logger-service:50051
+      PROCTOR_IMAGE: stss-proctor:latest
+      PROCTOR_NETWORK: stss-backend
+      PROCTOR_PUBLIC_HOST: localhost
+      PROCTOR_WS_SCHEME: ws
+      CONTROLLER_PORT: 8081
+    ports:
+      - "8081:8081"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    networks:
+      - backend
+
+volumes:
+  mysql_data:
+  logger_logs:
+
+networks:
+  backend:
+    name: stss-backend

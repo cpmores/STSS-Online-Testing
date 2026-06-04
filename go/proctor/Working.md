@@ -94,11 +94,11 @@ HTTP 端口：**9090**
 
 ### 核心功能
 
-1. **会话管理**：学生通过 WS 连接时从 Redis 创建/恢复会话，包含倒计时截止时间
-2. **答案收集**：WS 实时保存 + HTTP 兜底，答案写入 Redis Hash
+1. **会话管理**：学生通过 WS 连接时从 Redis 创建/恢复会话，截止时间取 `min(首次进入时间 + durationMins, exam.validEndTime)`
+2. **答案收集**：WS 实时保存 + HTTP 兜底，答案写入 Redis Hash；超时后拒绝继续保存
 3. **状态推送**：每次保存后同步剩余时间和已答题数
 4. **主动交卷**：学生发送 submit 消息，标记会话完成并入评分队列
-5. **强制交卷**：后台每 10 秒扫描过期会话，自动标记并通知学生
+5. **强制交卷**：后台每 10 秒扫描过期会话，自动标记并通知学生；学生若在超时后重连，会立即触发强制交卷
 6. **心跳保活**：服务端每 30 秒发送 ping，60 秒无 pong 断连
 
 ### API
@@ -140,7 +140,7 @@ HTTP 端口：**9090**
 | `exam:{examId}:proctor` | String (JSON) | Controller | 前端/网关 | proctor WS 端点 |
 | `exam:{examId}:session:{studentId}` | Hash | Proctor | Proctor | 会话：recordId, startTime, expireTime, status |
 | `exam:{examId}:answers:{studentId}` | Hash | Proctor | Java | 学生答案：questionId→answer |
-| `grading:pending` | List | Proctor | Java | 待评分队列，交卷后 RPUSH |
+| `grading:pending` | List | Proctor | Java | 待评分队列，交卷后 RPUSH Base64 编码的 protobuf `GradingTask` |
 
 ## 考试流程
 
@@ -164,11 +164,12 @@ HTTP 端口：**9090**
 4. 交卷（主动/超时）
    → 标记 session 为 submitted/expired
    → 答案写入 exam:{examId}:answers:{studentId}
-   → RPUSH grading:pending {examId, studentId, recordId}
+   → gRPC 成功时由 Java 直接评分
+   → gRPC 不可用时 RPUSH grading:pending(Base64 protobuf GradingTask)
    → 通知学生（submitted / exam_expired）
 
 5. Java 消费 grading:pending
-   → BRPOP grading:pending
+   → leftPop grading:pending（空队列时短暂 sleep 轮询）
    → 从 Redis 读答案 + 试卷快照
    → 评分 → 写 MySQL (student_exam_record, student_exam_answer)
    → 清理 Redis keys
