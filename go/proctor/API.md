@@ -99,7 +99,7 @@ Proctor 容器负责考试会话管理和实时答题。容器内部监听 `9090
 
 ### GET /ws
 
-WebSocket 考试通道，承载心跳保活和答案实时保存。
+WebSocket 考试通道，承载心跳保活和答案实时保存。会话截止时间取 `min(首次进入时间 + durationMins, exam.validEndTime)`；若学生在截止时间后重连，会立即触发强制交卷。
 
 **连接**
 ```
@@ -172,7 +172,7 @@ ws://localhost:{hostPort}/ws?studentId=20230001&recordId=456
 
 ### POST /answers/save
 
-HTTP 答案保存接口，作为 WebSocket 断开时的兜底方案。
+HTTP 答案保存接口，作为 WebSocket 断开时的兜底方案。若会话已结束或已超时，接口会拒绝保存。
 
 **请求**
 ```
@@ -316,7 +316,7 @@ GET /api/proctor/v1/session/20230001
 | `exam:{examId}:proctor` | String (JSON) | Controller | 前端/网关 | 2h | proctor 端点信息 |
 | `exam:{examId}:session:{studentId}` | Hash | Proctor | Proctor | 考试结束 + 1h | 考试会话元信息 |
 | `exam:{examId}:answers:{studentId}` | Hash | Proctor | Java | 考试结束 + 1h | 学生答案 |
-| `grading:pending` | List | Proctor | Java | — | 待评分队列，交卷后 RPUSH，Java BRPOP 消费 |
+| `grading:pending` | List | Proctor | Java | — | 待评分队列，交卷后 RPUSH Base64 编码的 protobuf `GradingTask`，Java 轮询 `leftPop` 消费 |
 
 ---
 

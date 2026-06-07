@@ -215,8 +215,8 @@ public class ActionLogger {
             log.setDurationMs(entry.durationMs());
             log.setEntityType(entry.entityType());
             log.setEntityId(entry.entityId());
-            log.setStringFields(trim(safeJson(entry.stringFields())));
-            log.setIntFields(trim(safeJson(entry.intFields())));
+            log.setStringFields(safeJson(entry.stringFields()));
+            log.setIntFields(safeJson(entry.intFields()));
             log.setErrorMessage(trim(entry.errorMessage()));
             log.setStackTrace(trim(entry.stackTrace(), STACK_TRACE_LIMIT));
             log.setGrpcDelivered(delivered ? 1 : 0);

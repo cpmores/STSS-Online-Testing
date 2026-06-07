@@ -133,6 +133,10 @@ func saveAnswerHandler(sm *SessionManager, lc *loggerclient.Client) gin.HandlerF
 		}
 		if err := sm.SaveAnswer(c.Request.Context(), req.StudentID, req.QuestionID, req.Answer); err != nil {
 			_ = logError(lc, c, "save answer failed", req.StudentID, err)
+			if isValidationError(err) {
+				c.JSON(http.StatusUnprocessableEntity, gin.H{"error": err.Error()})
+				return
+			}
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
 		}
@@ -171,6 +175,10 @@ func batchSaveHandler(sm *SessionManager, lc *loggerclient.Client) gin.HandlerFu
 		count, err := sm.SaveAnswers(c.Request.Context(), req.StudentID, batch)
 		if err != nil {
 			_ = logError(lc, c, "batch save failed", req.StudentID, err)
+			if isValidationError(err) {
+				c.JSON(http.StatusUnprocessableEntity, gin.H{"error": err.Error()})
+				return
+			}
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
 		}
@@ -191,8 +199,12 @@ func submitHandler(sm *SessionManager, lc *loggerclient.Client) gin.HandlerFunc 
 			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid payload"})
 			return
 		}
-		if err := sm.SubmitExam(c.Request.Context(), req.StudentID); err != nil {
+		if err := sm.SubmitExam(c.Request.Context(), req.StudentID, 0); err != nil {
 			_ = logError(lc, c, "submit exam failed", req.StudentID, err)
+			if isValidationError(err) {
+				c.JSON(http.StatusUnprocessableEntity, gin.H{"error": err.Error()})
+				return
+			}
 			c.JSON(http.StatusConflict, gin.H{"error": err.Error()})
 			return
 		}
@@ -236,11 +248,9 @@ func expiryWatcher(sm *SessionManager, conns *sync.Map, lc *loggerclient.Client)
 			continue
 		}
 		for _, studentID := range expired {
-			sm.MarkSessionEnded(ctx, studentID, SessionExpired)
-			// 入队待评分
-			session, _ := sm.GetSession(ctx, studentID)
-			if recordID, ok := session["recordId"]; ok {
-				sm.enqueueGrading(ctx, studentID, recordID)
+			if err := sm.SubmitExam(ctx, studentID, SessionExpired); err != nil {
+				log.Printf("forced submit failed for student %s: %v", studentID, err)
+				continue
 			}
 			if conn, ok := conns.LoadAndDelete(studentID); ok {
 				wsConn := conn.(*websocket.Conn)

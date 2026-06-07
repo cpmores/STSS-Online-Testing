@@ -52,17 +52,42 @@ func handleWS(studentID string, recordID int64, sm *SessionManager, conns *sync.
 	session, err := sm.CreateSession(ctx, studentID, recordID)
 	if err != nil {
 		log.Printf("failed to create session for student %s: %v", studentID, err)
+		writeJSON(conn, WSMessage{Type: "error", Status: err.Error()})
 		return
 	}
 
+	status, err := parseSessionStatus(session["status"])
+	if err != nil {
+		log.Printf("invalid session state for student %s: %v", studentID, err)
+		writeJSON(conn, WSMessage{Type: "error", Status: "invalid session state"})
+		return
+	}
 	answers, _ := sm.GetAnswers(ctx, studentID)
-	remaining, _ := sm.RemainingSeconds(ctx, studentID)
+	remaining, err := sm.RemainingSeconds(ctx, studentID)
+	if err != nil {
+		log.Printf("failed to load remaining time for student %s: %v", studentID, err)
+		writeJSON(conn, WSMessage{Type: "error", Status: "failed to load session timer"})
+		return
+	}
 	log.Printf("student %s connected, remaining %ds, %d saved answers", studentID, remaining, len(answers))
 
-	// 初始状态同步
-	if remaining > 0 {
-		sendStatus(conn, remaining, len(answers))
+	if status != SessionActive {
+		writeJSON(conn, WSMessage{Type: "submitted", Status: "session already ended"})
+		return
 	}
+	if remaining <= 0 {
+		if err := sm.SubmitExam(ctx, studentID, SessionExpired); err != nil {
+			log.Printf("forced submit on connect failed for student %s: %v", studentID, err)
+			writeJSON(conn, WSMessage{Type: "submitted", Status: "error: " + err.Error()})
+			return
+		}
+		log.Printf("student %s connected after deadline, forced submit immediately", studentID)
+		NotifyExpired(conn)
+		return
+	}
+
+	// 初始状态同步
+	sendStatus(conn, remaining, len(answers))
 
 	// 写入协程
 	done := make(chan struct{})
@@ -98,7 +123,11 @@ func handleWS(studentID string, recordID int64, sm *SessionManager, conns *sync.
 		case "save_answer":
 			if err := sm.SaveAnswer(ctx, studentID, msg.QuestionID, msg.Answer); err != nil {
 				log.Printf("failed to save answer for student %s: %v", studentID, err)
-				writeJSON(conn, WSMessage{Type: "ack", QuestionID: msg.QuestionID, Status: "error"})
+				writeJSON(conn, WSMessage{
+					Type:       "ack",
+					QuestionID: msg.QuestionID,
+					Status:     "error: " + err.Error(),
+				})
 				continue
 			}
 			answers, _ := sm.GetAnswers(ctx, studentID)
@@ -107,7 +136,7 @@ func handleWS(studentID string, recordID int64, sm *SessionManager, conns *sync.
 			sendStatus(conn, remaining, len(answers))
 
 		case "submit":
-			if err := sm.SubmitExam(ctx, studentID); err != nil {
+			if err := sm.SubmitExam(ctx, studentID, 0); err != nil {
 				log.Printf("submit failed for student %s: %v", studentID, err)
 				writeJSON(conn, WSMessage{Type: "submitted", Status: "error: " + err.Error()})
 				continue

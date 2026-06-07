@@ -1,0 +1,19 @@
+spring:
+  datasource:
+    url: jdbc:mysql://localhost:3306/stss_testing?useUnicode=true&characterEncoding=utf-8&useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=Asia/Shanghai
+    username: root
+    password: root
+
+logger:
+  grpc:
+    host: 127.0.0.1
+    port: 59999
+    timeout-ms: 100
+
+proctor:
+  grpc:
+    enabled: false
+  redis:
+    enabled: false
+  controller:
+    enabled: false
