@@ -11,9 +11,10 @@ import com.stss.online_testing.mapper.ExamPaperQuestionMapper;
 import com.stss.online_testing.mapper.QuestionMapper;
 import com.stss.online_testing.service.IQuestionService;
 import java.util.ArrayList;
-import java.util.Date;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Objects;
+import java.util.Set;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -27,9 +28,20 @@ public class QuestionServiceImpl extends ServiceImpl<QuestionMapper, Question> i
     @Autowired
     private ExamPaperMapper examPaperMapper;
 
+    @Override
+    public void ensureQuestionNotReferenced(Long questionId, String actionLabel) {
+        if (questionId == null || questionId <= 0) {
+            throw ApiBusinessException.badRequest("题目 id 必须为正整数");
+        }
+        List<String> referencedPaperNames = listReferencedPaperNames(questionId);
+        if (!referencedPaperNames.isEmpty()) {
+            throw ApiBusinessException.conflict(
+                    "题目已被以下试卷引用，无法" + actionLabel + ": " + String.join(", ", referencedPaperNames));
+        }
+    }
+
     /**
-     * 安全删除题目 (带有未开始试卷的风险校验)
-     * 返回受影响的试卷名称列表。如果列表为空，说明删除成功。
+     * 安全删除题目。
      */
     @Override
     @Transactional(rollbackFor = Exception.class)
@@ -43,44 +55,26 @@ public class QuestionServiceImpl extends ServiceImpl<QuestionMapper, Question> i
             throw ApiBusinessException.notFound("题目不存在或已删除");
         }
 
-        // 1. 查询该题目被哪些试卷引用了
-        QueryWrapper<ExamPaperQuestion> wrapper = new QueryWrapper<>();
-        wrapper.eq("question_id", questionId);
-        List<ExamPaperQuestion> relations = examPaperQuestionMapper.selectList(wrapper);
-
-        List<String> riskPaperNames = new ArrayList<>();
-        Date now = new Date();
-
-        // 2. 检查引用该题目的试卷状态
-        for (ExamPaperQuestion rel : relations) {
-            ExamPaper paper = examPaperMapper.selectById(rel.getPaperId());
-            if (paper != null && Objects.equals(paper.getIsDeleted(), 0)) {
-                // 风险条件：试卷是草稿(0)，或者试卷已发布(1)但有效开始时间还没到
-                boolean isDraft = Objects.equals(paper.getStatus(), 0);
-                boolean isPublishedButNotStarted =
-                        Objects.equals(paper.getStatus(), 1)
-                                && paper.getValidStartTime() != null
-                                && paper.getValidStartTime().after(now);
-
-                if (isDraft || isPublishedButNotStarted) {
-                    riskPaperNames.add(paper.getTitle());
-                }
-            }
-        }
-
-        // 3. 如果存在风险且前端没有传递强制删除标志，则直接返回风险列表，中止删除
-        if (!riskPaperNames.isEmpty() && !force) {
-            throw ApiBusinessException.conflict(
-                    "题目被以下未开始试卷引用，无法删除: " + String.join(", ", riskPaperNames));
-        }
-
-        // 4. 执行真正的删除 (逻辑删除)
-        // 注意：如果是强制删除，我们通常不会去动试卷，只会把题库里的这道题标记为已删除。
-        // 未开始的试卷如果抽取了这道题，在学生获取试卷的接口处需要做容错处理（过滤掉被删除的题）。
+        ensureQuestionNotReferenced(questionId, "删除");
         if (!this.removeById(questionId)) {
             throw ApiBusinessException.unprocessable("题目删除失败");
         }
 
-        return new ArrayList<>(); // 返回空列表代表成功
+        return new ArrayList<>();
+    }
+
+    private List<String> listReferencedPaperNames(Long questionId) {
+        QueryWrapper<ExamPaperQuestion> wrapper = new QueryWrapper<>();
+        wrapper.eq("question_id", questionId);
+        List<ExamPaperQuestion> relations = examPaperQuestionMapper.selectList(wrapper);
+        Set<String> paperNames = new LinkedHashSet<>();
+        for (ExamPaperQuestion relation : relations) {
+            ExamPaper paper = examPaperMapper.selectById(relation.getPaperId());
+            if (paper == null || !Objects.equals(paper.getIsDeleted(), 0)) {
+                continue;
+            }
+            paperNames.add(paper.getTitle() == null ? "试卷#" + paper.getId() : paper.getTitle());
+        }
+        return new ArrayList<>(paperNames);
     }
 }

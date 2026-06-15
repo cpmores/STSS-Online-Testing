@@ -105,6 +105,7 @@ public class StorageFacade {
             throw ApiBusinessException.notFound("题目不存在或已删除");
         }
         validateQuestionOwnership(existing, command.getOperatorId(), "修改");
+        questionService.ensureQuestionNotReferenced(existing.getId(), "修改");
 
         incoming.setCreatorId(existing.getCreatorId());
         if (incoming.getOptions() == null
