@@ -360,11 +360,9 @@ public class ProctorFacade {
         validatePageParams(current, size);
         Long studentId = command.getOperatorId();
 
-        // 1. 查所有已发布且在有效期内的试卷
+        // 1. 查所有已发布的试卷（包含已过期的）
         QueryWrapper<ExamPaper> paperWrapper = new QueryWrapper<>();
-        paperWrapper.eq("status", 1)
-                .and(w -> w.isNull("valid_end_time").or().gt("valid_end_time", new Date()))
-                .orderByDesc("create_time");
+        paperWrapper.eq("status", 1).orderByDesc("create_time");
         Page<ExamPaper> paperPage = examPaperMapper.selectPage(new Page<>(current, size), paperWrapper);
 
         // 2. 批量查该学生对应这些试卷的考试记录
