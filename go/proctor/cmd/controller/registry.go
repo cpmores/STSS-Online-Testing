@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"log"
 	"sync"
 	"time"
 
@@ -120,6 +121,15 @@ func (r *ProctorRegistry) create(examID string) (*ProctorInstance, error) {
 
 	ctx := context.Background()
 	containerName := fmt.Sprintf("proctor-exam-%s", examID)
+
+	// 清理同名孤儿容器（Controller 重启后内存注册表丢失，但 Docker 容器可能还在）
+	if _, inspectErr := r.dockerCli.ContainerInspect(ctx, containerName, client.ContainerInspectOptions{}); inspectErr == nil {
+		log.Printf("removing orphaned container %s", containerName)
+		if _, err := r.dockerCli.ContainerRemove(ctx, containerName, client.ContainerRemoveOptions{Force: true}); err != nil {
+			return nil, fmt.Errorf("failed to remove orphaned container %s: %w", containerName, err)
+		}
+	}
+
 	proctorPort := network.MustParsePort("9090/tcp")
 	hostConfig := &container.HostConfig{
 		PublishAllPorts: true,
