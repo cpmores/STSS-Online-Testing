@@ -29,4 +29,8 @@ public class ExamPaper {
     private Date updateTime;
     @TableLogic
     private Integer isDeleted;
+
+    /** 允许答题次数（来自 exam_runtime_config 表，非本表字段，仅用于传输） */
+    @TableField(exist = false)
+    private Integer allowedAttempts;
 }

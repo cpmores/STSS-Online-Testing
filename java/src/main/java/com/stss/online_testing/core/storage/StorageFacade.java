@@ -256,7 +256,26 @@ public class StorageFacade {
             wrapper.eq("creator_id", command.getOperatorId());
         }
         wrapper.orderByDesc("create_time");
-        return examPaperService.page(page, wrapper);
+        examPaperService.page(page, wrapper);
+
+        // 批量查询运行时配置，补充 allowedAttempts（该字段在 exam_runtime_config 表）
+        List<Long> examIds = page.getRecords().stream().map(ExamPaper::getId).toList();
+        if (!examIds.isEmpty()) {
+            List<ExamRuntimeConfig> configs = examRuntimeConfigMapper.selectBatchIds(examIds);
+            if (configs != null && !configs.isEmpty()) {
+                Map<Long, Integer> attemptMap = configs.stream()
+                        .collect(java.util.stream.Collectors.toMap(
+                                ExamRuntimeConfig::getExamId,
+                                ExamRuntimeConfig::getAllowedAttempts,
+                                (a, b) -> a));
+                page.getRecords().forEach(paper -> {
+                    Integer attempts = attemptMap.get(paper.getId());
+                    paper.setAllowedAttempts(attempts != null ? attempts : 1);
+                });
+            }
+        }
+
+        return page;
     }
 
     private ExamPaperStudentVO previewExamPaper(StorageCommand command) {

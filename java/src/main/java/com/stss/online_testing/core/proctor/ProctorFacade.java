@@ -376,10 +376,32 @@ public class ProctorFacade {
                     .collect(Collectors.toMap(StudentExamRecord::getExamId, r -> r, (a, b) -> a));
         }
 
-        // 3. 组装返回数据
+        // 3. 批量查答题次数配置
+        Map<Long, Integer> attemptConfigMap = new HashMap<>();
+        if (!examIds.isEmpty()) {
+            List<ExamRuntimeConfig> configs = examRuntimeConfigMapper.selectBatchIds(examIds);
+            if (configs != null) {
+                attemptConfigMap = configs.stream()
+                        .collect(Collectors.toMap(ExamRuntimeConfig::getExamId, ExamRuntimeConfig::getAllowedAttempts, (a, b) -> a));
+            }
+        }
+
+        // 4. 批量统计已提交次数
+        Map<Long, Long> submittedCountMap = new HashMap<>();
+        if (!examIds.isEmpty()) {
+            QueryWrapper<StudentExamRecord> submittedWrapper = new QueryWrapper<>();
+            submittedWrapper.eq("student_id", studentId).in("exam_id", examIds).eq("status", 1);
+            List<StudentExamRecord> submittedRecords = studentExamRecordMapper.selectList(submittedWrapper);
+            submittedCountMap = submittedRecords.stream()
+                    .collect(Collectors.groupingBy(StudentExamRecord::getExamId, Collectors.counting()));
+        }
+
+        // 5. 组装返回数据
         List<Map<String, Object>> items = new ArrayList<>();
         for (ExamPaper paper : paperPage.getRecords()) {
             StudentExamRecord record = recordMap.get(paper.getId());
+            int allowedAttempts = attemptConfigMap.getOrDefault(paper.getId(), 1);
+            long submittedCount = submittedCountMap.getOrDefault(paper.getId(), 0L);
             Map<String, Object> item = new LinkedHashMap<>();
             item.put("examId", paper.getId());
             item.put("examTitle", paper.getTitle());
@@ -392,6 +414,8 @@ public class ProctorFacade {
             item.put("recordStatus", record == null ? null : record.getStatus());
             item.put("studentScore", record == null ? null : record.getTotalScore());
             item.put("submitTime", record == null ? null : record.getSubmitTime());
+            item.put("allowedAttempts", allowedAttempts);
+            item.put("submittedCount", (int) submittedCount);
             items.add(item);
         }
 
