@@ -14,10 +14,12 @@ import com.stss.online_testing.mapper.QuestionMapper;
 import com.stss.online_testing.service.IExamPaperService;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Random;
 import java.util.stream.Collectors;
 import org.springframework.beans.BeanUtils;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -306,23 +308,20 @@ public class ExamPaperServiceImpl extends ServiceImpl<ExamPaperMapper, ExamPaper
         QueryWrapper<Question> wrapper = new QueryWrapper<>();
         wrapper.eq("course_id", courseId).eq("type", type).eq("is_deleted", 0);
 
-        if (rules.getTargetDifficulty() != null) {
-            wrapper.eq("difficulty", rules.getTargetDifficulty());
-        }
         if (rules.getKnowledgePoints() != null && !rules.getKnowledgePoints().isEmpty()) {
-            wrapper.and(
-                    condition -> {
-                        for (int i = 0; i < rules.getKnowledgePoints().size(); i++) {
-                            String knowledgePoint = rules.getKnowledgePoints().get(i);
-                            if (i == 0) {
-                                condition.like("knowledge_points", knowledgePoint);
-                            } else {
-                                condition.or().like("knowledge_points", knowledgePoint);
-                            }
-                        }
-                    });
+            wrapper.and(condition -> {
+                for (int i = 0; i < rules.getKnowledgePoints().size(); i++) {
+                    String knowledgePoint = rules.getKnowledgePoints().get(i);
+                    if (i == 0) {
+                        condition.like("knowledge_points", knowledgePoint);
+                    } else {
+                        condition.or().like("knowledge_points", knowledgePoint);
+                    }
+                }
+            });
         }
 
+        // 不再用 eq("difficulty", ...) 硬过滤 —— 改为查所有难度，用正态分布加权抽样
         List<Question> candidates = questionMapper.selectList(wrapper);
         if (candidates.size() < limit) {
             throw ApiBusinessException.unprocessable(
@@ -334,8 +333,68 @@ public class ExamPaperServiceImpl extends ServiceImpl<ExamPaperMapper, ExamPaper
                             + candidates.size()
                             + " 道");
         }
-        Collections.shuffle(candidates);
-        return candidates.stream().limit(limit).map(Question::getId).collect(Collectors.toList());
+
+        Integer targetDifficulty = rules.getTargetDifficulty();
+        if (targetDifficulty == null) {
+            // 未指定目标难度 → 均匀随机（原行为）
+            Collections.shuffle(candidates);
+            return candidates.stream().limit(limit).map(Question::getId).collect(Collectors.toList());
+        }
+
+        // 正态分布加权随机抽样
+        return weightedRandomSample(candidates, limit, targetDifficulty);
+    }
+
+    /**
+     * 以 targetDifficulty 为正态分布均值的加权随机抽样。
+     * σ = 0.8，距离均值越近的难度被抽中概率越高。
+     */
+    private List<Long> weightedRandomSample(
+            List<Question> candidates, int limit, int targetDifficulty) {
+        // 按难度分组，每组内先打乱
+        Map<Integer, List<Question>> groups = new HashMap<>();
+        for (Question q : candidates) {
+            groups.computeIfAbsent(q.getDifficulty(), k -> new ArrayList<>()).add(q);
+        }
+        for (List<Question> group : groups.values()) {
+            Collections.shuffle(group);
+        }
+
+        List<Long> result = new ArrayList<>();
+        double sigma = 0.8;
+        Random rng = new Random();
+
+        while (result.size() < limit) {
+            // 计算当前各难度的正态分布权重
+            double[] weights = new double[4]; // index 1-3
+            double totalWeight = 0;
+            for (int d = 1; d <= 3; d++) {
+                List<Question> group = groups.get(d);
+                if (group != null && !group.isEmpty()) {
+                    double z = (d - targetDifficulty) / sigma;
+                    weights[d] = Math.exp(-0.5 * z * z);
+                    totalWeight += weights[d];
+                }
+            }
+
+            // 按权重随机选难度
+            double r = rng.nextDouble() * totalWeight;
+            double cumulative = 0;
+            int chosen = 0;
+            for (int d = 1; d <= 3; d++) {
+                cumulative += weights[d];
+                if (r <= cumulative) {
+                    chosen = d;
+                    break;
+                }
+            }
+
+            // 从该难度中取一道（从末尾移除，O(1)）
+            List<Question> chosenGroup = groups.get(chosen);
+            result.add(chosenGroup.remove(chosenGroup.size() - 1).getId());
+        }
+
+        return result;
     }
 
     @Override

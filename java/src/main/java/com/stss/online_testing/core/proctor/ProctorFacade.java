@@ -376,10 +376,39 @@ public class ProctorFacade {
                     .collect(Collectors.toMap(StudentExamRecord::getExamId, r -> r, (a, b) -> a));
         }
 
-        // 3. 组装返回数据
+        // 3. 批量查运行时配置（允许次数、成绩可见、答案可见）
+        Map<Long, ExamRuntimeConfig> configMap = new HashMap<>();
+        if (!examIds.isEmpty()) {
+            List<ExamRuntimeConfig> configs = examRuntimeConfigMapper.selectBatchIds(examIds);
+            if (configs != null) {
+                configMap = configs.stream()
+                        .collect(Collectors.toMap(ExamRuntimeConfig::getExamId, c -> c, (a, b) -> a));
+            }
+        }
+
+        // 4. 批量统计已提交次数
+        Map<Long, Long> submittedCountMap = new HashMap<>();
+        if (!examIds.isEmpty()) {
+            QueryWrapper<StudentExamRecord> submittedWrapper = new QueryWrapper<>();
+            submittedWrapper.eq("student_id", studentId).in("exam_id", examIds).eq("status", 1);
+            List<StudentExamRecord> submittedRecords = studentExamRecordMapper.selectList(submittedWrapper);
+            submittedCountMap = submittedRecords.stream()
+                    .collect(Collectors.groupingBy(StudentExamRecord::getExamId, Collectors.counting()));
+        }
+
+        // 5. 组装返回数据
         List<Map<String, Object>> items = new ArrayList<>();
         for (ExamPaper paper : paperPage.getRecords()) {
             StudentExamRecord record = recordMap.get(paper.getId());
+            ExamRuntimeConfig config = configMap.get(paper.getId());
+            int allowedAttempts = config != null && config.getAllowedAttempts() != null
+                    ? config.getAllowedAttempts() : 1;
+            long submittedCount = submittedCountMap.getOrDefault(paper.getId(), 0L);
+            boolean scoreVisible = config != null && config.getScoreVisible() != null
+                    && config.getScoreVisible() == 1;
+            boolean answerVisible = config != null && config.getAnswerVisible() != null
+                    && config.getAnswerVisible() == 1;
+
             Map<String, Object> item = new LinkedHashMap<>();
             item.put("examId", paper.getId());
             item.put("examTitle", paper.getTitle());
@@ -390,8 +419,12 @@ public class ProctorFacade {
             item.put("paperStatus", paper.getStatus());
             item.put("recordId", record == null ? null : record.getId());
             item.put("recordStatus", record == null ? null : record.getStatus());
-            item.put("studentScore", record == null ? null : record.getTotalScore());
+            item.put("studentScore", scoreVisible && record != null ? record.getTotalScore() : null);
             item.put("submitTime", record == null ? null : record.getSubmitTime());
+            item.put("allowedAttempts", allowedAttempts);
+            item.put("submittedCount", (int) submittedCount);
+            item.put("scoreVisible", scoreVisible);
+            item.put("answerVisible", answerVisible);
             items.add(item);
         }
 
